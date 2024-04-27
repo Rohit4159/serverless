@@ -1,0 +1,139 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: 'Resources such as SQS, SNS dynamoDB etc'
+
+Parameters:
+  Environment:
+    Description: 'Environment where resource is going to be created'
+    Type: String
+    Default: Dev
+    AllowedValues:
+      - 'Dev'
+      - 'PreProd'
+      - 'Prod'
+  ADSTableName:
+    Type: String
+    Description: Table name for the ADS service
+    Default: 'TBL_ADS_INV'
+
+
+Resources:
+  MyS3Bucket:
+    Type: AWS::S3::Bucket
+    DependsOn: LambdaPermission
+    Properties:
+      BucketName: ADS_BatchProcessing
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: 's3:ObjectCreated:*'
+            Function: !GetAtt LambdaFunction.Arn
+            Filter:
+              S3Key:
+                Rules:
+                  - Name: prefix
+                    Value: "ADS_Manually_Process_"
+                  - Name: suffix
+                    Value: !Sub "${Day}-${Month}-${Year}"
+
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: LambdaExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "arn:aws:logs:*:*:*"
+              - Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                Resource: "arn:aws:s3:::*"
+              - Effect: Allow
+                Action:
+                  - dynamodb:GetItem
+                Resource: "arn:aws:dynamodb:*:*:table/ADSTable"
+                - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: "arn:aws:sqs:*:*:*"
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: "*"
+              - Effect: Allow
+                Action:
+                  - ses:SendEmail
+                  - ses:SendRawEmail
+                Resource: "*"
+
+  LambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      Handler: lambda_function.lambda_handler
+      Role: !GetAtt LambdaExecutionRole.Arn
+      Runtime: python3.8
+
+  LambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt LambdaFunction.Arn
+      Principal: s3.amazonaws.com
+      SourceArn: !GetAtt MyS3Bucket.Arn
+
+  MySQSQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      FifoQueue: true
+      QueueName: ADS_RetryRequest.fifo
+
+  ADSTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      AttributeDefinitions:
+        - AttributeName: "ServiceUUID"
+          AttributeType: "S"
+      KeySchema:
+        - AttributeName: "ServiceUUID"
+          KeyType: "HASH"
+      BillingMode: PAY_PER_REQUEST
+      TableName:
+        Fn::Join:
+          - "_"
+          - - !Ref Environment
+            - !Ref ADSTableName
+      GlobalSecondaryIndexes:
+        -
+          IndexName: ADSTable-GSI
+          KeySchema:
+            -
+              AttributeName: "ServiceUUID"
+              KeyType: "HASH"
+          Projection: 
+            NonKeyAttributes:
+              - "RETRY_COUNT"
+              - "INV_DETAILS"
+            ProjectionType: "INCLUDE"
+      Tags:
+        - Key: Name
+          Value:
+            Fn::Join:
+              - "_"
+              - - !Ref Environment
+                - !Ref ADSTableName
+
