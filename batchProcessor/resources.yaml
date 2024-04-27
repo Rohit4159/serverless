@@ -137,3 +137,8 @@ Resources:
               - - !Ref Environment
                 - !Ref ADSTableName
 
+  MySNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: ADS_SNSTopic
+
